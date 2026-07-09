@@ -2,7 +2,7 @@
   <tr>
     <td>
       <!-- VERSION -->v1.0.0<br>
-      <!-- DATE -->2026<br>
+      <!-- DATE -->09-Jul-2026<br>
       macOS &nbsp;|&nbsp; Windows &nbsp;|&nbsp; Linux<br>
       <a href="https://landenlabs.com">Home</a>
     </td>
@@ -13,6 +13,8 @@
     </td>
   </tr>
 </table>
+
+<img src="icon.png" width="72" align="left" alt="Color Picker icon">
 
 # Color Picker
 
@@ -25,7 +27,51 @@ screen-pixel sampling, and a scrollable recent-colors list with gradient stop su
 
 ## Screenshots
 
-_(coming soon)_
+**Pick from Screen**
+
+<img src="screens/screen-picker.png" alt="Color Picker main window with the magnified screen-pixel viewer open" width="800">
+
+The magnified viewer follows the cursor while picking, with a crosshair over the exact
+pixel that will be sampled.
+
+---
+
+**Drop or paste color data**
+
+<img src="screens/drop-colors.png" alt="Dropping a file onto the color swatch prompts for the text/data format" width="800">
+
+Dragging a file (or pasting text) onto the color swatch prompts you to choose how to
+interpret it — CSV-DEC-RGBA, CSV-DEC-RGBA-step, Android gradient XML, or alpha-first hex.
+
+---
+
+**Gradient stop graph**
+
+<img src="screens/with-graph.png" alt="Recent colors list with the stop-value line graph panel showing red, green, blue, and alpha channels" width="800">
+
+Gradient colors (red, green, blue, alpha, value) can be plotted as a line graph, useful
+for visualizing how a palette's channels and stop values change across the gradient.
+
+---
+
+**Simplify gradient data**
+
+Gradients can be simplified by removing intermediate stop values that don't materially
+change the interpolated result.
+
+| Before | After |
+| --- | --- |
+| <img src="screens/data-start.png" alt="Gradient stop data before simplification" width="380"> | <img src="screens/data-simplified.png" alt="Gradient stop data after simplification" width="380"> |
+
+---
+
+**Save palette**
+
+<img src="screens/save-palette.png" alt="Save Recent Colors dialog" width="800">
+
+Color palettes can be saved to a CSV file and are also placed on the paste buffer
+(clipboard), so they're immediately available to paste elsewhere without opening the
+saved file.
 
 ---
 
@@ -69,10 +115,8 @@ _(coming soon)_
 - Pillow + pytesseract (optional — required for OCR palette import)
 - matplotlib (optional — enhances the histogram dialog)
 
-```
-pip install PyQt6
-pip install pillow pytesseract   # optional OCR support
-pip install matplotlib            # optional histogram support
+```bash
+pip install -r requirements.txt
 ```
 
 ---
@@ -102,6 +146,9 @@ pyinstaller --onefile --name color-picker color-picker.py
 ```
 
 Both commands use [PyInstaller](https://pyinstaller.org) to produce a self-contained executable.
+
+Pushing a `v*` tag (e.g. `v1.0.0`) triggers `.github/workflows/build.yml`, which builds
+macOS and Windows binaries and publishes them to a GitHub Release automatically.
 
 ---
 
@@ -138,11 +185,39 @@ Click **Save** in the Recent list header to write all current colors to a CSV fi
 
 ```
 color-picker/
-├── color-picker.py     # Main script (single-file GUI)
+├── color-picker.py             # Main script (single-file GUI)
+├── version.py                  # Version string (__version__)
+├── VERSION                     # Bare X.Y.Z, mirrors version.py
+├── set-version.bash            # Bump version, commit, tag, push (macOS/Linux)
+├── set-version.ps1             # Bump version, commit, tag, push (Windows)
+├── icon.png                    # App icon: title bar, Dock/taskbar, About dialog, README
+├── icon.icns                   # App icon baked into the macOS release build
+├── icon.ico                    # App icon baked into the Windows release build
+├── make-icons.bash             # Regenerate icon.icns/icon.ico from icon.png (macOS/Linux)
+├── make-icons.ps1              # Regenerate icon.icns/icon.ico from icon.png (Windows)
+├── make_icons.py               #   shared Pillow-based generator used by both
+├── requirements.txt
 ├── README.md
 ├── LICENSE
-└── screens/            # Images used in this README
+├── screens/                    # Images used in this README
+└── .github/workflows/build.yml # Tag-triggered build + GitHub Release
 ```
+
+---
+
+## Releasing
+
+Versions are bumped with `set-version.bash` (or `set-version.ps1` on Windows), run from
+the repo root:
+
+```bash
+./set-version.bash -version 1.0.1 -message "Fix gradient-stop unit conversion"
+```
+
+This updates `VERSION`, `version.py` (`__version__`), and the `<!-- VERSION -->` /
+`<!-- DATE -->` markers in this README, then commits, tags, and pushes — the push of the
+`vX.Y.Z` tag triggers the release build above. The in-app "Built" date (About dialog) is
+derived from `version.py`'s file timestamp, so it tracks the last version bump.
 
 ---
 

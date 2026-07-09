@@ -65,7 +65,8 @@ from PyQt6.QtWidgets import (
 )
 
 
-__version__ = "1.0.0"
+from version import __version__
+
 WHEEL_SIZE = 260
 SWATCH_SIZE = 260
 WINDOW_TITLE = f"Color Picker - v{__version__}   LanDen Labs (2026)"
@@ -88,7 +89,7 @@ def _apply_theme(theme: str) -> None:
         p.setColor(QPalette.ColorRole.WindowText, Qt.GlobalColor.white)
         p.setColor(QPalette.ColorRole.Base, QColor(35, 35, 35))
         p.setColor(QPalette.ColorRole.AlternateBase, QColor(53, 53, 53))
-        p.setColor(QPalette.ColorRole.ToolTipBase, Qt.GlobalColor.white)
+        p.setColor(QPalette.ColorRole.ToolTipBase, QColor(53, 53, 53))
         p.setColor(QPalette.ColorRole.ToolTipText, Qt.GlobalColor.white)
         p.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.white)
         p.setColor(QPalette.ColorRole.Button, QColor(53, 53, 53))
@@ -546,6 +547,10 @@ class _MiniSwatch(QFrame):
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self._color = QColor(color)
 
+    def set_color(self, color: QColor):
+        self._color = QColor(color)
+        self.update()
+
     def paintEvent(self, event):
         super().paintEvent(event)
         p = QPainter(self)
@@ -611,7 +616,8 @@ class _RecentColorRow(QWidget):
         h.addWidget(self._label)
         h.addWidget(self._stop_label)
         h.addStretch(1)
-        h.addWidget(_MiniSwatch(self.color))
+        self._swatch = _MiniSwatch(self.color)
+        h.addWidget(self._swatch)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def _hex_for_mode(self, mode: str) -> str:
@@ -623,6 +629,12 @@ class _RecentColorRow(QWidget):
     def set_mode(self, mode: str):
         self._mode = mode
         self._label.setText(self._hex_for_mode(mode))
+
+    def set_color(self, color: QColor):
+        """Update this row's color in place (e.g. edited via the channel mixers)."""
+        self.color = QColor(color)
+        self._label.setText(self._hex_for_mode(self._mode))
+        self._swatch.set_color(self.color)
 
     def set_stop_visible(self, visible: bool):
         """Show or hide the gradient-stop value column for this row."""
@@ -741,11 +753,29 @@ class RecentColors(QFrame):
         self.listChanged.emit()
 
     def _activate(self, row: "_RecentColorRow", color: QColor):
-        if self._selected is not None and self._selected is not row:
+        if self._selected is row:
+            # Clicking the already-selected row again unselects it.
+            row.set_selected(False)
+            self._selected = None
+            return
+        if self._selected is not None:
             self._selected.set_selected(False)
         row.set_selected(True)
         self._selected = row
         self.colorActivated.emit(color)
+
+    def update_selected_color(self, color: QColor):
+        """Update the currently selected row's color (e.g. from the channel mixers).
+
+        Only takes effect when a row is both selected AND checked — this lets
+        a color be edited live while checked/selected, then the checkbox
+        unchecked to "detach" before mixing a different color to add as a
+        new entry. No-op otherwise.
+        """
+        if self._selected is None or not self._selected.check.isChecked():
+            return
+        self._selected.set_color(color)
+        self.listChanged.emit()
 
     def _delete_checked(self):
         for i in reversed(range(self._list.count())):
@@ -859,6 +889,43 @@ class RecentColors(QFrame):
                 self, "Save Recent Colors", "The Recent list is empty."
             )
             return
+        has_stop = any(sv is not None for _, sv in rows)
+        lines: list[str] = []
+        if self._mode == "ARGB":
+            header = "aarrggbb,alpha,red,green,blue"
+            if has_stop:
+                header += ",stop"
+            lines.append(header)
+            for c, sv in rows:
+                line = (
+                    f"#{c.alpha():02X}{c.red():02X}"
+                    f"{c.green():02X}{c.blue():02X},"
+                    f"{c.alpha()},{c.red()},{c.green()},{c.blue()}"
+                )
+                if has_stop:
+                    line += f",{sv:.3f}" if sv is not None else ","
+                lines.append(line)
+        else:
+            header = "rrggbbaa,red,green,blue,alpha"
+            if has_stop:
+                header += ",stop"
+            lines.append(header)
+            for c, sv in rows:
+                line = (
+                    f"#{c.red():02X}{c.green():02X}"
+                    f"{c.blue():02X}{c.alpha():02X},"
+                    f"{c.red()},{c.green()},{c.blue()},{c.alpha()}"
+                )
+                if has_stop:
+                    line += f",{sv:.3f}" if sv is not None else ","
+                lines.append(line)
+        csv_text = "\n".join(lines) + "\n"
+
+        # Place the CSV data on the clipboard immediately, before the save
+        # dialog even opens, so it's available to paste regardless of
+        # whether the user completes or cancels the file save.
+        QGuiApplication.clipboard().setText(csv_text)
+
         path, _ = QFileDialog.getSaveFileName(
             self,
             "Save Recent Colors",
@@ -867,37 +934,9 @@ class RecentColors(QFrame):
         )
         if not path:
             return
-        has_stop = any(sv is not None for _, sv in rows)
         try:
             with open(path, "w", encoding="utf-8", newline="") as f:
-                if self._mode == "ARGB":
-                    header = "aarrggbb,alpha,red,green,blue"
-                    if has_stop:
-                        header += ",stop"
-                    f.write(header + "\n")
-                    for c, sv in rows:
-                        line = (
-                            f"#{c.alpha():02X}{c.red():02X}"
-                            f"{c.green():02X}{c.blue():02X},"
-                            f"{c.alpha()},{c.red()},{c.green()},{c.blue()}"
-                        )
-                        if has_stop:
-                            line += f",{sv:.3f}" if sv is not None else ","
-                        f.write(line + "\n")
-                else:
-                    header = "rrggbbaa,red,green,blue,alpha"
-                    if has_stop:
-                        header += ",stop"
-                    f.write(header + "\n")
-                    for c, sv in rows:
-                        line = (
-                            f"#{c.red():02X}{c.green():02X}"
-                            f"{c.blue():02X}{c.alpha():02X},"
-                            f"{c.red()},{c.green()},{c.blue()},{c.alpha()}"
-                        )
-                        if has_stop:
-                            line += f",{sv:.3f}" if sv is not None else ","
-                        f.write(line + "\n")
+                f.write(csv_text)
         except OSError as exc:
             QMessageBox.warning(
                 self, "Save Recent Colors", f"Could not write file:\n{exc}"
@@ -905,12 +944,26 @@ class RecentColors(QFrame):
 
 
 def _build_date() -> str:
+    """Release/build date, derived from version.py's mtime -- set-version.bash
+    rewrites version.py on every release, so this tracks the last publish."""
+    target = Path(__file__).parent / "version.py"
     try:
-        return datetime.fromtimestamp(
-            os.path.getmtime(Path(__file__))
-        ).strftime("%Y-%m-%d")
+        return datetime.fromtimestamp(target.stat().st_mtime).strftime("%Y-%m-%d")
     except OSError:
         return "unknown"
+
+
+def resource_path(name: str) -> Path:
+    """Locate a bundled resource (e.g. icon.png) both when run from source
+    and when frozen by PyInstaller, which unpacks --add-data into _MEIPASS."""
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
+    return base / name
+
+
+def app_icon() -> QIcon:
+    """QIcon for icon.png, or a null QIcon if the resource is missing."""
+    path = resource_path("icon.png")
+    return QIcon(str(path)) if path.is_file() else QIcon()
 
 
 def _bold_label(text: str) -> QLabel:
@@ -970,12 +1023,19 @@ class AboutDialog(QDialog):
                 self._anim_label, alignment=Qt.AlignmentFlag.AlignCenter
             )
 
+        header = QHBoxLayout()
+        icon_lbl = QLabel()
+        icon_lbl.setPixmap(app_icon().pixmap(48, 48))
+        header.addWidget(icon_lbl)
+
         name_font = QFont()
         name_font.setPointSize(15)
         name_font.setBold(True)
         name_lbl = QLabel("Color Picker")
         name_lbl.setFont(name_font)
-        root.addWidget(name_lbl)
+        header.addWidget(name_lbl)
+        header.addStretch(1)
+        root.addLayout(header)
 
         desc = QLabel(
             f"v{__version__}  —  Color picker with a color wheel, "
@@ -1854,35 +1914,58 @@ def _simplify_gradient_stops(
 ) -> "list[tuple[QColor, float]]":
     """Reduce a gradient to its main color inflection points.
 
-    Treats the gradient as a piecewise-linear curve through RGBA space
-    parametrized by the stop position, then applies Ramer-Douglas-Peucker
-    simplification: a stop is dropped when its actual color lies within
-    ``tolerance`` (Euclidean RGBA distance, 0-510) of the color that linear
-    interpolation between the retained neighbours would produce at that
-    stop. The first and last stops are always kept. Input order doesn't
-    matter — the stops are sorted by position first.
+    Treats the gradient as a piecewise-linear curve through RGBA space in
+    the order the stops were given — the sequence is never re-sorted by
+    stop position, so an increasing, decreasing, or non-monotonic
+    ("sine wave") slope is preserved exactly; only interior points are
+    ever dropped, and the first and last stops are always kept.
+
+    A stop is a candidate for removal when the color that linear
+    interpolation between its retained neighbours would produce at its
+    position lies within ``tolerance`` (Euclidean RGBA distance, 0-510) of
+    a 3-point rolling average of the actual colors around that position.
+    Comparing against the rolling average — rather than the stop's raw
+    color, as plain Ramer-Douglas-Peucker would — means an isolated noisy
+    outlier doesn't force a stop to be kept, while a real, sustained trend
+    change (which shifts the average) still does.
     """
-    if len(pairs) <= 2:
+    n = len(pairs)
+    if n <= 2:
         return list(pairs)
-    pts = sorted(pairs, key=lambda cs: cs[1])  # ascending by stop position
-    keep = [False] * len(pts)
+    pts = list(pairs)  # preserve given order/direction; do not re-sort
+
+    def channel_avg(i: int) -> "tuple[float, float, float, float]":
+        lo, hi = max(0, i - 1), min(n - 1, i + 1)
+        window = [pts[j][0] for j in range(lo, hi + 1)]
+        return (
+            sum(c.red() for c in window) / len(window),
+            sum(c.green() for c in window) / len(window),
+            sum(c.blue() for c in window) / len(window),
+            sum(c.alpha() for c in window) / len(window),
+        )
+
+    smoothed = [channel_avg(i) for i in range(n)]
+
+    keep = [False] * n
     keep[0] = keep[-1] = True
 
     def deviation(i: int, i0: int, i1: int) -> float:
-        """Color distance at point ``i`` from the i0->i1 interpolation line."""
-        s0, s1 = pts[i0][1], pts[i1][1]
-        f = 0.0 if s1 == s0 else (pts[i][1] - s0) / (s1 - s0)
-        c0, c1, c = pts[i0][0], pts[i1][0], pts[i][0]
-        dr = c.red()   - (c0.red()   + f * (c1.red()   - c0.red()))
-        dg = c.green() - (c0.green() + f * (c1.green() - c0.green()))
-        db = c.blue()  - (c0.blue()  + f * (c1.blue()  - c0.blue()))
-        da = c.alpha() - (c0.alpha() + f * (c1.alpha() - c0.alpha()))
+        """Distance between the i0->i1 interpolation and the local trend at ``i``."""
+        f = 0.0 if i1 == i0 else (i - i0) / (i1 - i0)
+        c0, c1 = pts[i0][0], pts[i1][0]
+        r = c0.red()   + f * (c1.red()   - c0.red())
+        g = c0.green() + f * (c1.green() - c0.green())
+        b = c0.blue()  + f * (c1.blue()  - c0.blue())
+        a = c0.alpha() + f * (c1.alpha() - c0.alpha())
+        sr, sg, sb, sa = smoothed[i]
+        dr, dg, db, da = r - sr, g - sg, b - sb, a - sa
         return math.sqrt(dr * dr + dg * dg + db * db + da * da)
 
     # Iterative RDP (an explicit stack avoids recursion limits on long
     # gradients): split each span at its largest deviation while it exceeds
-    # the tolerance.
-    stack = [(0, len(pts) - 1)]
+    # the tolerance. Interpolation fraction is by sequence position, not
+    # stop value, so non-monotonic stop sequences still simplify sanely.
+    stack = [(0, n - 1)]
     while stack:
         i0, i1 = stack.pop()
         if i1 <= i0 + 1:
@@ -1897,7 +1980,7 @@ def _simplify_gradient_stops(
             stack.append((i0, max_i))
             stack.append((max_i, i1))
 
-    return [pts[i] for i in range(len(pts)) if keep[i]]
+    return [pts[i] for i in range(n) if keep[i]]
 
 
 # Conversions surfaced in the "Unit" button menu, grouped by category. Each
@@ -1933,6 +2016,7 @@ class MainWindow(QMainWindow):
     def __init__(self, initial_color: QColor | None = None):
         super().__init__()
         self.setWindowTitle(WINDOW_TITLE)
+        self.setWindowIcon(app_icon())
         self._guard = False
         self._color = QColor(initial_color) if initial_color else QColor(255, 0, 0, 255)
 
@@ -2190,6 +2274,7 @@ class MainWindow(QMainWindow):
             self.a_row.spin.value(),
         )
         self._apply_color(c, source="channels")
+        self.recent.update_selected_color(c)
 
     def _from_wheel(self, c: QColor):
         if self._guard:
@@ -2697,9 +2782,7 @@ def main():
     if theme not in ("Light", "Dark"):
         theme = DEFAULT_THEME
     _apply_theme(theme)
-    icon_path = Path(__file__).parent / "color-icon.png"
-    if icon_path.exists():
-        app.setWindowIcon(QIcon(str(icon_path)))
+    app.setWindowIcon(app_icon())
     win = MainWindow()
     win.show()
     sys.exit(app.exec())
