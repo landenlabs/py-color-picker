@@ -1,8 +1,8 @@
 <table border="0">
   <tr>
     <td>
-      <!-- VERSION -->v6.07.05<br>
-      <!-- DATE -->09-Jul-2026<br>
+      <!-- VERSION -->v6.07.10<br>
+      <!-- DATE -->17-Jul-2026<br>
       macOS &nbsp;|&nbsp; Windows &nbsp;|&nbsp; Linux<br>
       <a href="https://landenlabs.com">Home</a>
     </td>
@@ -214,8 +214,8 @@ the repo root:
 ./set-version.bash -version 1.0.1 -message "Fix gradient-stop unit conversion"
 ```
 
-This updates `VERSION`, `version.py` (`__version__`), and the `<!-- VERSION -->v6.07.05 /
-`<!-- DATE -->09-Jul-2026
+This updates `VERSION`, `version.py` (`__version__`), and the `<!-- VERSION -->v6.07.10 /
+`<!-- DATE -->17-Jul-2026
 `vX.Y.Z` tag triggers the release build above. The in-app "Built" date (About dialog) is
 derived from `version.py`'s file timestamp, so it tracks the last version bump.
 
