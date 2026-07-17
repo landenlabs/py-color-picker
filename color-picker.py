@@ -60,6 +60,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QSlider,
     QSpinBox,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
@@ -1098,6 +1099,100 @@ class AboutDialog(QDialog):
         self._last_frame_num = frame_num
 
 
+_HELP_HTML = """
+<h2>Dropping Colors In</h2>
+<p>Drag a file onto the app (or paste from the clipboard) and a dialog will
+ask which format to use if more than one applies.</p>
+
+<h3>Image</h3>
+<p>A screenshot, PNG/JPG file, or a copied image from the clipboard.</p>
+<ul>
+<li><b>Qt Index Image</b> &mdash; up to 256 colors via Qt's built-in
+quantization.</li>
+<li><b>Histogram</b> &mdash; the N most popular colors (16 / 64 / 256) with
+fuzzy shade merging.</li>
+<li><b>SSDS Color Palette</b> &mdash; OCR reads repeating
+<code>Step / A / R / G / B</code> columns from a palette screenshot.</li>
+<li><b>Pangea Color Palette</b> &mdash; OCR reads one row per color:
+<code>step &nbsp; description &nbsp; R,G,B,A</code>.</li>
+</ul>
+
+<h3>JSON file (.json)</h3>
+<ul>
+<li><b>SSDS-JSON Palette</b> &mdash; path
+<code>Palettes &rarr; Palette &rarr; ColorList &rarr; ColorStep[]</code>,
+each entry:
+<pre>{"Step": 233.15, "ARGB": "255,255,175,0"}</pre>
+where <code>ARGB</code> is four comma-separated 0&ndash;255 integers in
+Alpha, Red, Green, Blue order.</li>
+<li><b>JSON &nbsp;value, color (RGBA)</b> &mdash; a flat <code>colors[]</code>
+list, each entry:
+<pre>{"value": 233.15,
+ "color": {"red": 255, "green": 175, "blue": 0, "alpha": 1}}</pre>
+<code>red</code>/<code>green</code>/<code>blue</code> are 0&ndash;255;
+<code>alpha</code> may be a 0&ndash;1 fraction or a 0&ndash;255 integer.</li>
+</ul>
+
+<h3>Plain text / CSV / TSV</h3>
+<p>A dropped <code>.txt</code>/<code>.csv</code>/<code>.tsv</code> file, or
+pasted text. Rows may be comma- or whitespace-separated (e.g. pasted from a
+spreadsheet).</p>
+<ul>
+<li><b>CSV-DEC-RGBA</b> &mdash; rows of <code>red,green,blue,alpha</code>
+(decimal 0&ndash;255).</li>
+<li><b>CSV-DEC-RGBA-step</b> &mdash; rows of
+<code>red,green,blue,alpha,step</code>; <code>step</code> is a float that may
+end in <code>f</code> (e.g. <code>1,2,3,4,5.0f</code>); a trailing comma is
+allowed.</li>
+<li><b>Android:Gradient1</b> &mdash; <code>&lt;item android:offset=".."
+android:color=".." /&gt;</code> tags (3/4/6/8-digit hex, alpha-first;
+<code>offset</code> becomes the stop position).</li>
+<li><b>Hex:ARGB</b> &mdash; rows of alpha-first hex, e.g.
+<code>#FF3B0A8A</code>.</li>
+</ul>
+
+<h2>Saving / Exporting</h2>
+<p>The <b>Save</b> button above the Recent list writes every color to a CSV
+file (default name <code>recent_colors.csv</code>) and also copies the same
+text to the clipboard. The header depends on the current channel-order mode
+(toggled with the mode button):</p>
+<ul>
+<li><b>RGBA mode</b> &mdash;
+<code>rrggbbaa,red,green,blue,alpha</code></li>
+<li><b>ARGB mode</b> &mdash;
+<code>aarrggbb,alpha,red,green,blue</code></li>
+</ul>
+<p>If any row carries a gradient stop value (from SSDS, Pangea, JSON, or
+CSV-step imports), a trailing <code>stop</code> column is appended.</p>
+"""
+
+
+class HelpDialog(QDialog):
+    """Non-modal help window describing drop/paste input formats and export."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Color Picker Help")
+        self.setModal(False)
+        self.resize(560, 540)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 16)
+
+        browser = QTextBrowser()
+        browser.setOpenExternalLinks(True)
+        browser.setHtml(_HELP_HTML)
+        root.addWidget(browser)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        close_btn = QPushButton("Close")
+        close_btn.setDefault(True)
+        close_btn.clicked.connect(self.close)
+        btn_row.addWidget(close_btn)
+        root.addLayout(btn_row)
+
+
 def _extract_palette(image: QImage, max_colors: int = 256) -> list[QColor]:
     """Return up to ``max_colors`` representative colors from ``image``.
 
@@ -1343,6 +1438,46 @@ def _parse_json_palette(text: str) -> list[tuple[QColor, float]]:
                 max(0, min(255, int(v.strip())))
                 for v in entry["ARGB"].split(",")
             ]
+            results.append((QColor(r, g, b, a), step))
+        except (KeyError, ValueError, AttributeError, TypeError):
+            continue
+    return results
+
+
+def _parse_json_palette_rgba(text: str) -> list[tuple[QColor, float]]:
+    """Parse a flat JSON palette into (QColor, stop) pairs.
+
+    Expected structure:
+        colors[] entries, each with a numeric "value" and a "color"
+        object holding "red", "green", "blue" (0–255 each) and "alpha"
+        (either a 0–1 fraction or a 0–255 int), e.g.::
+
+            {"colors": [
+                {"value": 233.15,
+                 "color": {"red": 255, "green": 175, "blue": 0, "alpha": 1}}
+            ]}
+    """
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return []
+    try:
+        entries = data["colors"]
+    except (KeyError, TypeError):
+        return []
+    if not isinstance(entries, list):
+        entries = [entries]
+    results: list[tuple[QColor, float]] = []
+    for entry in entries:
+        try:
+            step = float(entry["value"])
+            color = entry["color"]
+            r = max(0, min(255, round(float(color["red"]))))
+            g = max(0, min(255, round(float(color["green"]))))
+            b = max(0, min(255, round(float(color["blue"]))))
+            alpha = float(color["alpha"])
+            a = round(alpha * 255) if 0 <= alpha <= 1 else round(alpha)
+            a = max(0, min(255, a))
             results.append((QColor(r, g, b, a), step))
         except (KeyError, ValueError, AttributeError, TypeError):
             continue
@@ -1627,6 +1762,13 @@ class ImageProcessingDialog(QDialog):
         self._method_group.addButton(self._rb_ssds_json, 4)
         root.addWidget(self._rb_ssds_json)
 
+        # 6. JSON value/color(RGBA) — parse colors[].value + color{red,green,blue,alpha}
+        self._rb_json_rgba = QRadioButton(
+            "JSON  value, color (RGBA)  —  Parse \"value\" + color{red,green,blue,alpha}"
+        )
+        self._method_group.addButton(self._rb_json_rgba, 5)
+        root.addWidget(self._rb_json_rgba)
+
         root.addSpacing(8)
 
         btns = QDialogButtonBox(
@@ -1648,12 +1790,13 @@ class ImageProcessingDialog(QDialog):
             self._hist_sub.setEnabled(False)
         else:
             self._rb_ssds_json.setEnabled(False)
+            self._rb_json_rgba.setEnabled(False)
 
     def method(self) -> str:
-        """Return 'qt_index', 'histogram', 'ssds', 'pangea', or 'ssds_json'."""
-        return ("qt_index", "histogram", "ssds", "pangea", "ssds_json")[
-            self._method_group.checkedId()
-        ]
+        """Return 'qt_index', 'histogram', 'ssds', 'pangea', 'ssds_json', or 'json_rgba'."""
+        return (
+            "qt_index", "histogram", "ssds", "pangea", "ssds_json", "json_rgba",
+        )[self._method_group.checkedId()]
 
     def n_colors(self) -> int:
         """Return the chosen histogram color count (16, 64, or 256)."""
@@ -2027,17 +2170,23 @@ class MainWindow(QMainWindow):
         font.setBold(True)
         title.setFont(font)
 
-        self.help_btn = QPushButton("?")
-        self.help_btn.setFixedSize(28, 28)
-        self.help_btn.setToolTip("Show the About dialog (version and credits)")
-        self.help_btn.clicked.connect(self._show_about)
+        self.help_btn = QPushButton("Help")
+        self.help_btn.setToolTip(
+            "Show the input drop/paste formats and the save/export format"
+        )
+        self.help_btn.clicked.connect(self._show_help)
+        self._help_dialog: HelpDialog | None = None
+
+        self.about_btn = QPushButton("About")
+        self.about_btn.setToolTip("Show the About dialog (version and credits)")
+        self.about_btn.clicked.connect(self._show_about)
 
         title_row = QHBoxLayout()
-        title_row.addSpacing(28)  # balance the right-side button so title centers
+        title_row.addWidget(self.help_btn)
         title_row.addStretch(1)
         title_row.addWidget(title)
         title_row.addStretch(1)
-        title_row.addWidget(self.help_btn)
+        title_row.addWidget(self.about_btn)
 
         self.wheel = ColorWheel()
         self.box = ColorBox()
@@ -2467,7 +2616,7 @@ class MainWindow(QMainWindow):
         """Show method-choice dialog pre-set to SSDS-JSON, then parse."""
         dlg = ImageProcessingDialog(self, input_type="json")
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            self._process_json_palette(text)
+            self._process_json_palette(text, method=dlg.method())
 
     def _show_text_format_dialog(self, text: str):
         """Prompt for the CSV text format, then load the colors into recent."""
@@ -2540,17 +2689,29 @@ class MainWindow(QMainWindow):
             for color in colors:
                 self.recent.add(color)
 
-    def _process_json_palette(self, text: str):
-        pairs = _parse_json_palette(text)
-        if not pairs:
-            QMessageBox.information(
-                self, "SSDS-JSON Palette — No Data Found",
-                "No color steps were found in the JSON.\n\n"
-                "Expected path:  Palettes → Palette → ColorList → ColorStep[]\n"
-                "Each entry needs a \"Step\" field and an \"ARGB\" field\n"
-                "containing four comma-separated decimal values (A,R,G,B).",
-            )
-            return
+    def _process_json_palette(self, text: str, method: str = "ssds_json"):
+        if method == "json_rgba":
+            pairs = _parse_json_palette_rgba(text)
+            if not pairs:
+                QMessageBox.information(
+                    self, "JSON Palette — No Data Found",
+                    "No color entries were found in the JSON.\n\n"
+                    "Expected shape:  colors[] with a \"value\" field and a\n"
+                    "\"color\" object containing \"red\", \"green\", \"blue\"\n"
+                    "(0–255) and \"alpha\" (0–1 or 0–255).",
+                )
+                return
+        else:
+            pairs = _parse_json_palette(text)
+            if not pairs:
+                QMessageBox.information(
+                    self, "SSDS-JSON Palette — No Data Found",
+                    "No color steps were found in the JSON.\n\n"
+                    "Expected path:  Palettes → Palette → ColorList → ColorStep[]\n"
+                    "Each entry needs a \"Step\" field and an \"ARGB\" field\n"
+                    "containing four comma-separated decimal values (A,R,G,B).",
+                )
+                return
         self.recent.clear_all()
         for color, stop in pairs:
             self.recent.add(color, stop_value=stop)
@@ -2679,6 +2840,15 @@ class MainWindow(QMainWindow):
 
     def _show_about(self):
         AboutDialog(self).exec()
+
+    def _show_help(self):
+        # Non-modal: keep a reference alive so the dialog isn't garbage
+        # collected while the user keeps working in the main window.
+        if self._help_dialog is None:
+            self._help_dialog = HelpDialog(self)
+        self._help_dialog.show()
+        self._help_dialog.raise_()
+        self._help_dialog.activateWindow()
 
     def _duplicate_window(self):
         child = MainWindow(initial_color=self._color)
